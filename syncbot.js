@@ -53,16 +53,77 @@ function formatCommitEmbed(commit, repository) {
   };
 }
 
+// Format PR embed for Discord
+function formatPullRequestEmbed(payload) {
+  const pr = payload.pull_request;
+  const action = payload.action;
+
+  // Set color based on action/state
+  let color = 0x2cbe4e; // Green (Open/Sync)
+  if (action === 'closed') {
+    color = pr.merged ? 0x6f42c1 : 0xd73a49; // Purple if merged, Red if closed without merge
+  }
+
+  return {
+    color: color,
+    author: {
+      name: pr.user.login,
+      icon_url: pr.user.avatar_url
+    },
+    title: `[PR: ${payload.repository.name}] ${pr.title} (#${pr.number})`,
+    description: `**Action:** ${action}\n[View Pull Request](${pr.html_url})\n\n${pr.body ? pr.body.substring(0, 200) + (pr.body.length > 200 ? '...' : '') : ''}`,
+    fields: [
+      {
+        name: 'Source (Fork)',
+        value: pr.head.label, // e.g., "user:branch"
+        inline: true
+      },
+      {
+        name: 'Target',
+        value: pr.base.label, // e.g., "owner:main"
+        inline: true
+      }
+    ],
+    timestamp: pr.updated_at || new Date().toISOString(),
+    footer: {
+      text: payload.repository.full_name
+    }
+  };
+}
+
 // Handle push events
 app.post('/webhook/github', verifyGitHubSignature, async (req, res) => {
   const event = req.headers['x-github-event'];
 
-  // Only handle push events
+  const payload = req.body;
+
+  // Handle Pull Request events (tracking changes from forks)
+  if (event === 'pull_request') {
+    const action = payload.action;
+
+    // Create embed
+    const embed = formatPullRequestEmbed(payload);
+
+    const discordMessage = {
+      content: `🔄 Pull Request Update in **${payload.repository.full_name}**`,
+      embeds: [embed]
+    };
+
+    try {
+      await axios.post(DISCORD_WEBHOOK_URL, discordMessage);
+      return res.status(200).send('PR event processed successfully');
+    } catch (error) {
+      console.error('Error sending to Discord:', error.response?.data || error.message);
+      return res.status(500).send('Error processing PR webhook');
+    }
+  }
+
+  // Only handle push events if not PR
   if (event !== 'push') {
     return res.status(200).send('Event ignored');
   }
 
-  const payload = req.body;
+
   const repository = payload.repository;
   const commits = payload.commits;
   const pusher = payload.pusher.name;
